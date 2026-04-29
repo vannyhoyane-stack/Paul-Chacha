@@ -1,0 +1,57 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} { allow read, write: if false; }
+
+    function isSignedIn() { return request.auth != null; }
+    function isAdmin() { return isSignedIn() && request.auth.token.email.lower() == 'chachapaul721@gmail.com'; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+
+    // Helpers for Product
+    function isValidProduct(data) {
+      return data.keys().hasAll(['title', 'category', 'price', 'createdAt']) && data.keys().size() <= 9
+        && data.title is string && data.title.size() <= 100
+        && data.category is string && data.category.size() <= 50
+        && (data.price is number || data.price is int || data.price is float)
+        && data.createdAt is timestamp;
+    }
+
+    // Helpers for Purchase
+    function isValidPurchase(data) {
+      return data.keys().hasAll(['productId', 'userId', 'status', 'createdAt']) && data.keys().size() <= 6
+        && data.productId is string && data.productId.size() <= 128
+        && data.userId is string && data.userId.size() <= 128
+        && data.status in ['pending', 'approved', 'rejected']
+        && data.createdAt is timestamp;
+    }
+
+    match /products/{productId} {
+      allow list: if true;
+      allow get: if true;
+      allow create: if isAdmin() && isValidId(productId) && isValidProduct(incoming()) && incoming().createdAt == request.time;
+      allow update: if (isAdmin() || (isAdmin() && isValidProduct(incoming()) && incoming().createdAt == existing().createdAt));
+      allow delete: if isAdmin();
+    }
+
+    match /purchases/{purchaseId} {
+      // User can read their own, admin can read all
+      allow list: if isSignedIn() && (isAdmin() || resource.data.userId == request.auth.uid);
+      allow get: if isSignedIn() && (isAdmin() || resource.data.userId == request.auth.uid);
+
+      // User creates pending request
+      allow create: if isSignedIn() && isValidId(purchaseId) && isValidPurchase(incoming())
+                    && incoming().userId == request.auth.uid
+                    && incoming().status == 'pending'
+                    && incoming().createdAt == request.time;
+
+      // Admin can update status
+      allow update: if (
+        isAdmin() && isValidPurchase(incoming()) && incoming().createdAt == existing().createdAt
+      );
+
+      allow delete: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid && resource.data.status == 'pending');
+    }
+  }
+}
